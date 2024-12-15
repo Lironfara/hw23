@@ -721,14 +721,42 @@
         if (is_reserved_word var)
         then raise (X_syntax "Variable cannot be a reserved word")
         else ScmVarGet(Var var)
-     (* add support for if *)
+      (* 
+      type sexpr =
+      | ScmVoid
+      | ScmNil
+      | ScmBoolean of bool
+      | ScmChar of char
+      | ScmString of string
+      | ScmSymbol of string
+      | ScmNumber of scm_number
+      | ScmVector of (sexpr list)
+      | ScmPair of (sexpr * sexpr);;*)
+      
+     (* add support for if *)  
+     | ScmPair (ScmSymbol "if", ScmPair(test, ScmPair (dit, ScmNil))) ->
+      let test = tag_parse test in (*if 3 4*)
+      let dit = tag_parse dit  in
+     ScmIf(test, dit, ScmConst ScmVoid)
+     | ScmPair (ScmSymbol "if", ScmPair(test, ScmPair (dit, ScmPair (dif, ScmNil)))) ->(*f 3 4 5*)
+      let test = tag_parse(test) in 
+      let dit = tag_parse(dit) in 
+      let dif = tag_parse(dif) in
+      ScmIf(test, dit, dif) 
      | ScmPair (ScmSymbol "or", ScmNil) -> tag_parse (ScmBoolean false)
-     | ScmPair (ScmSymbol "or", ScmPair (sexpr, ScmNil)) -> tag_parse sexpr
+     | ScmPair (ScmSymbol "or", ScmPair (sexpr, ScmNil)) -> tag_parse sexpr (*For only 1 expr in or (or 1 .() -> 1*) (*or ->#f*)
      | ScmPair (ScmSymbol "or", sexprs) ->
         (match (scheme_list_to_ocaml sexprs) with
          | (sexprs', ScmNil) -> ScmOr (List.map tag_parse sexprs')
          | _ -> raise (X_syntax "Malformed or-expression!"))
      (* add support for begin *)
+     | ScmPair (ScmSymbol "begin", ScmNil) -> ScmConst ScmVoid
+     | ScmPair (ScmSymbol "begin", ScmPair (sexpr, ScmNil)) -> 
+       tag_parse sexpr  (*begin 1 2 3 .()*) 
+     | ScmPair (ScmSymbol "begin", sexprs) ->
+      (match (scheme_list_to_ocaml sexprs) with
+      | (sexprs', ScmNil) -> ScmSeq (List.map tag_parse sexprs')
+      | _ -> raise (X_syntax "Malformed begin-expression!"))
      | ScmPair (ScmSymbol "set!",
                 ScmPair (ScmSymbol var,
                          ScmPair (expr, ScmNil))) ->
@@ -738,10 +766,17 @@
      | ScmPair (ScmSymbol "set!", _) ->
         raise (X_syntax "Malformed set!-expression!")
      (* add support for define *)
+     (*nil is No need to write, it's like place holder for pair with only one item*)
+     | ScmPair (ScmSymbol "define", ScmPair(ScmSymbol var , ScmPair (expr, ScmNil)))  (*(define a 33333)*)->
+        if (is_reserved_word var)
+        then raise (X_syntax "cannot assign a reserved word")
+        else ScmVarDef (Var var, tag_parse expr) 
+     | ScmPair (ScmSymbol "define", ScmPair (ScmSymbol var, ScmNil))-> (*(define a)*)
+     ScmVarDef(Var var, ScmConst ScmNil) 
      | ScmPair (ScmSymbol "lambda", rest)
           when scm_improper_list rest ->
         raise (X_syntax "Malformed lambda-expression!")
-     | ScmPair (ScmSymbol "lambda", ScmPair (params, exprs)) ->
+      | ScmPair (ScmSymbol "lambda", ScmPair (params, exprs)) -> (*lamnda (a b c) (body)*)
         let expr = tag_parse (ScmPair(ScmSymbol "begin", exprs)) in
         (match (scheme_list_to_ocaml params) with
          | params, ScmNil ->
@@ -756,6 +791,23 @@
             else raise (X_syntax "duplicate function parameters")
          | _ -> raise (X_syntax "invalid parameter list"))
      (* add support for let *)
+     | ScmPair (ScmSymbol "let", ScmPair (ScmNil, body)) -> (* "(let () (+ a b))";; take the body -> make labda applic of the lambda*)
+     let expr = tag_parse (ScmPair(ScmSymbol "lambda",ScmPair(ScmNil,body))) in
+     ScmApplic (expr,[]) (*no parms*)
+
+     | ScmPair (ScmSymbol "let", ScmPair (bindings, body)) -> (* parse "(let ((a 2) (b 3) (c 4)) (+ a b))" *)
+        let bindings = fst (scheme_list_to_ocaml bindings) in (*get the first element of list in a list ((a 2) (b 3))*)
+        let vars, values = List.split (List.map (function (*split pairs of (a 2) into vars = a, values = b for every item in the list ((a 2) (b 3))*)
+           | ScmPair (ScmSymbol var, ScmPair (value, ScmNil)) -> (var, value)
+           | _ -> raise (X_syntax "Expecting a symbol, but found this"))
+            bindings) in
+        let vars_sexpr = List.fold_right (fun var acc -> ScmPair (ScmSymbol var, acc)) vars ScmNil in
+        let lambda = ScmPair (ScmSymbol "lambda", ScmPair (vars_sexpr, body)) in
+        let expr_body = tag_parse lambda in
+        let args = List.map tag_parse values in
+        ScmApplic (expr_body, args)
+
+
      (* add support for let* *)
      (* add support for letrec *)
      | ScmPair (ScmSymbol "and", ScmNil) -> tag_parse (ScmBoolean true)
