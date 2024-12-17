@@ -721,6 +721,10 @@
         if (is_reserved_word var)
         then raise (X_syntax "Variable cannot be a reserved word")
         else ScmVarGet(Var var)
+      (*  then raise (X_syntax
+                            (Printf.sprintf
+                               "reserved word %s in proc position"
+                               var))*)
       (* 
       type sexpr =
       | ScmVoid
@@ -753,6 +757,7 @@
      | ScmPair (ScmSymbol "begin", ScmNil) -> ScmConst ScmVoid
      | ScmPair (ScmSymbol "begin", ScmPair (sexpr, ScmNil)) -> 
        tag_parse sexpr  (*begin 1 2 3 .()*) 
+       (*lambda (x) (let((x 1))(-x 1))*)
      | ScmPair (ScmSymbol "begin", sexprs) ->
       (match (scheme_list_to_ocaml sexprs) with
       | (sexprs', ScmNil) -> ScmSeq (List.map tag_parse sexprs')
@@ -792,10 +797,10 @@
          | _ -> raise (X_syntax "invalid parameter list"))
      (* add support for let *)
      | ScmPair (ScmSymbol "let", ScmPair (ScmNil, body)) -> (* "(let () (+ a b))";; take the body -> make labda applic of the lambda*)
-     let expr = tag_parse (ScmPair(ScmSymbol "lambda",ScmPair(ScmNil,body))) in
-     ScmApplic (expr,[]) (*no parms*)
+            let expr = tag_parse (ScmPair(ScmSymbol "lambda",ScmPair(ScmNil,body))) in
+            ScmApplic (expr,[]) (*no parms*)
 
-     | ScmPair (ScmSymbol "let", ScmPair (bindings, body)) -> (* parse "(let ((a 2) (b 3) (c 4)) (+ a b))" *)
+     | ScmPair (ScmSymbol "let", ScmPair (bindings, body)) -> (* parse "(let ((a 2) (b 3) (c 4)) (+ a b) (+ c d))" *)
         let bindings = fst (scheme_list_to_ocaml bindings) in (*get the first element of list in a list ((a 2) (b 3))*)
         let vars, values = List.split (List.map (function (*split pairs of (a 2) into vars = a, values = b for every item in the list ((a 2) (b 3))*)
            | ScmPair (ScmSymbol var, ScmPair (value, ScmNil)) -> (var, value)
@@ -807,9 +812,111 @@
         let args = List.map tag_parse values in
         ScmApplic (expr_body, args)
 
+      (* add support for let* *)
 
-     (* add support for let* *)
+     | ScmPair (ScmSymbol "let*", ScmPair (ScmNil, body)) -> (* "(let () (+ a b))";; take the body -> make labda applic of the lambda*)
+        let expr = tag_parse (ScmPair(ScmSymbol "lambda",ScmPair(ScmNil,body))) in
+        ScmApplic (expr,[]) (*no parms*)
+
+     | ScmPair (ScmSymbol "let*", ScmPair(ScmPair (binding, ScmNil),body)) -> (*let* ((v1 expr1) . ()) body*)
+        let var, value = 
+        (match binding with
+          | ScmPair (ScmSymbol var, ScmPair (value, ScmNil)) -> (var, value) (*let ((1 7)) ScmSymbol to make sure this state doesnt happen*)
+          | _ -> raise (X_syntax "Expecting a symbol, but found this")) in
+        let lambda = ScmPair (ScmSymbol "lambda", ScmPair (ScmPair(ScmSymbol var,ScmNil), body)) in
+        let expr_body = tag_parse lambda in
+        let arg = tag_parse value in
+        ScmApplic (expr_body, [arg])
+
+     | ScmPair (ScmSymbol "let*", ScmPair (ScmPair(binding1, rest), body)) -> (*let* ((a 1) (b 2) (c 3)) (+ a b) -> extract for each paren ((var, value) -> binding1)*)
+        let var, value = 
+         (match binding1 with
+       | ScmPair (ScmSymbol var, ScmPair (value, ScmNil)) -> (var, value) (*let ((1 7)) ScmSymbol to make sure this state doesnt happen*)
+       | _ -> raise (X_syntax "Expecting a symbol, but found this")) in
+        let inlet= ScmPair(ScmSymbol "let*", ScmPair(rest, body)) in (*(let* ((v2 expr2) ... (vn exprn) body))*)
+          (* Transform (let* ((v1 expr1) (v2 expr2) ... (vn exprn)) body)
+           into (let ((v1 expr1)) (let* ((v2 expr2) ... (vn exprn)) body)) *)
+        let lambda = ScmPair(ScmSymbol "lambda", ScmPair(ScmPair(ScmSymbol var, ScmNil),ScmPair(inlet,ScmNil))) in
+        let expr_body = tag_parse lambda in
+        let arg = tag_parse value in
+        ScmApplic (expr_body, [arg])
+       
+     (*Meir:
+     ScmApplic
+ (ScmLambda (["fact"], Simple,
+ ScmSeq
+ [ScmVarSet (Var "fact",
+ ScmLambda (["n"], Simple,
+ ScmIf (ScmApplic (ScmVarGet (Var "zero?"), [
+ ScmVarGet (Var "n")]),
+ ScmConst (ScmNumber (ScmInteger 1)),
+ ScmApplic (ScmVarGet (Var "*"),
+ [ScmVarGet (Var "n");
+ ScmApplic (ScmVarGet (Var "fact"),
+ [ScmApplic (ScmVarGet (Var "-"),
+ [ScmVarGet (Var "n"); ScmConst (ScmNumber (
+ ScmInteger 1))])])]))));
+ ScmApplic (ScmVarGet (Var "+"),
+ [ScmApplic (ScmVarGet (Var "fact"),
+ [ScmConst (ScmNumber (ScmInteger 5))]);
+ ScmApplic (ScmVarGet (Var "fact"),
+ [ScmConst (ScmNumber (ScmInteger 55))])])]),
+ [ScmConst (ScmSymbol "whatever")])
+     *)
+
+
+     (*ScmApplic
+ (ScmLambda (["fact"], Simple,
+   ScmSeq
+    [ScmVarSet (Var "fact",
+      ScmLambda (["n"], Simple,
+       ScmIf (ScmApplic (ScmVarGet (Var "zero?"), [ScmVarGet (Var "n")]),
+        ScmConst (ScmNumber (ScmInteger 1)),
+        ScmApplic (ScmVarGet (Var "*"),
+         [ScmVarGet (Var "n");
+          ScmApplic (ScmVarGet (Var "fact"),
+           [ScmApplic (ScmVarGet (Var "-"),
+             [ScmVarGet (Var "n"); ScmConst (ScmNumber (ScmInteger 1))])])]))));
+     ScmApplic (ScmVarGet (Var "+"),
+      [ScmApplic (ScmVarGet (Var "fact"),
+        [ScmConst (ScmNumber (ScmInteger 5))]);
+       ScmApplic (ScmVarGet (Var "fact"),
+        [ScmConst (ScmNumber (ScmInteger 55))])])]),
+ [ScmVarGet (Var "'whatever")])*)
+
+
+
      (* add support for letrec *)
+     | ScmPair (ScmSymbol "letrec", ScmPair (bindings, body)) ->
+      let bindings = fst (scheme_list_to_ocaml bindings) in (*get the first element of list in a list ((a 2) (b 3))*)
+      let vars, values = List.split (List.map (function (*split pairs of (a 2) into vars = a, values = b for every item in the list ((a 2) (b 3))*)
+         | ScmPair (ScmSymbol var, value) -> 
+          (ScmPair(ScmSymbol var, ScmPair(ScmSymbol "'whatever", ScmNil)),
+          ScmPair(ScmSymbol "set!", ScmPair(ScmSymbol var, value))) 
+         | _ -> raise (X_syntax "Expecting a symbol, but found this")) (*The split is to separte pair in pair into 2 lists*)
+          bindings) in (*vars = f1...fn, values = (set! f1 Expr1) (set! f2 Expr2)... (set! fn Exprn)*)
+          let values = List.fold_right (fun valu acc -> ScmPair (valu, acc)) values ScmNil in
+          let values = match values with
+          | ScmPair (value, ScmNil) -> value
+          | _ -> raise (X_syntax "Expecting a symbol, but found this") in
+          let values= ScmPair(values,body) in
+          let vars = List.fold_right (fun var acc -> ScmPair (var, acc)) vars ScmNil in
+          let l= ScmPair(ScmSymbol "let", ScmPair(vars, values)) in
+          tag_parse l
+      
+      (*Step 1 : extract f1 ... fn*)
+      (*Step 2 : set binding to pairs of (fi 'wh)*)
+      (*Step 3 : body of let is list of n (set! fi (expri)) + body*)
+
+      (*let ((f1 'wh) (f2 'wh) ..... (fn 'wh)) 
+      (set! f1 (expr1) 
+      (set! f2 (expr2)
+      ....
+      (set! fn (exprn))
+      body )*)
+
+
+
      | ScmPair (ScmSymbol "and", ScmNil) -> tag_parse (ScmBoolean true)
      | ScmPair (ScmSymbol "and", exprs) ->
         (match (scheme_list_to_ocaml exprs) with
