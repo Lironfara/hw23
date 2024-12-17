@@ -841,49 +841,6 @@
         let arg = tag_parse value in
         ScmApplic (expr_body, [arg])
        
-     (*Meir:
-     ScmApplic
- (ScmLambda (["fact"], Simple,
- ScmSeq
- [ScmVarSet (Var "fact",
- ScmLambda (["n"], Simple,
- ScmIf (ScmApplic (ScmVarGet (Var "zero?"), [
- ScmVarGet (Var "n")]),
- ScmConst (ScmNumber (ScmInteger 1)),
- ScmApplic (ScmVarGet (Var "*"),
- [ScmVarGet (Var "n");
- ScmApplic (ScmVarGet (Var "fact"),
- [ScmApplic (ScmVarGet (Var "-"),
- [ScmVarGet (Var "n"); ScmConst (ScmNumber (
- ScmInteger 1))])])]))));
- ScmApplic (ScmVarGet (Var "+"),
- [ScmApplic (ScmVarGet (Var "fact"),
- [ScmConst (ScmNumber (ScmInteger 5))]);
- ScmApplic (ScmVarGet (Var "fact"),
- [ScmConst (ScmNumber (ScmInteger 55))])])]),
- [ScmConst (ScmSymbol "whatever")])
-     *)
-
-
-     (*ScmApplic
- (ScmLambda (["fact"], Simple,
-   ScmSeq
-    [ScmVarSet (Var "fact",
-      ScmLambda (["n"], Simple,
-       ScmIf (ScmApplic (ScmVarGet (Var "zero?"), [ScmVarGet (Var "n")]),
-        ScmConst (ScmNumber (ScmInteger 1)),
-        ScmApplic (ScmVarGet (Var "*"),
-         [ScmVarGet (Var "n");
-          ScmApplic (ScmVarGet (Var "fact"),
-           [ScmApplic (ScmVarGet (Var "-"),
-             [ScmVarGet (Var "n"); ScmConst (ScmNumber (ScmInteger 1))])])]))));
-     ScmApplic (ScmVarGet (Var "+"),
-      [ScmApplic (ScmVarGet (Var "fact"),
-        [ScmConst (ScmNumber (ScmInteger 5))]);
-       ScmApplic (ScmVarGet (Var "fact"),
-        [ScmConst (ScmNumber (ScmInteger 55))])])]),
- [ScmVarGet (Var "'whatever")])*)
-
 
 
      (* add support for letrec *)
@@ -891,7 +848,7 @@
       let bindings = fst (scheme_list_to_ocaml bindings) in (*get the first element of list in a list ((a 2) (b 3))*)
       let vars, values = List.split (List.map (function (*split pairs of (a 2) into vars = a, values = b for every item in the list ((a 2) (b 3))*)
          | ScmPair (ScmSymbol var, value) -> 
-          (ScmPair(ScmSymbol var, ScmPair(ScmSymbol "'whatever", ScmNil)),
+          (ScmPair(ScmSymbol var, ScmPair(ScmPair(ScmSymbol "quote", ScmPair (ScmSymbol "whatever", ScmNil)),ScmNil)),
           ScmPair(ScmSymbol "set!", ScmPair(ScmSymbol var, value))) 
          | _ -> raise (X_syntax "Expecting a symbol, but found this")) (*The split is to separte pair in pair into 2 lists*)
           bindings) in (*vars = f1...fn, values = (set! f1 Expr1) (set! f2 Expr2)... (set! fn Exprn)*)
