@@ -537,6 +537,16 @@
  let scheme_sexpr_list_of_sexpr_list sexprs =
    List.fold_right (fun car cdr -> ScmPair (car, cdr)) sexprs ScmNil;;
  
+
+
+   let list_no_nil sexprs =
+    let rec remove_nil_from_last_pair = function
+      | [] -> ScmNil
+      | [ScmNil] -> ScmNil
+      | [x] when x <> ScmNil -> x
+      | x :: xs -> ScmPair (x, remove_nil_from_last_pair xs)
+    in
+    remove_nil_from_last_pair sexprs
  (* the tag-parser *)
  
  exception X_syntax of string;;
@@ -778,6 +788,15 @@
         else ScmVarDef (Var var, tag_parse expr) 
      | ScmPair (ScmSymbol "define", ScmPair (ScmSymbol var, ScmNil))-> (*(define a)*)
      ScmVarDef(Var var, ScmConst ScmNil) 
+     | ScmPair (ScmSymbol "define", ScmPair(varVars,expr))->
+      (*define (add a b) (+ a b)*)
+      let first, args = match varVars with (*rest = args, first = proc*)
+        | ScmPair(ScmSymbol first, arg) -> (first, arg)
+        | _ -> raise (X_syntax "Expecting a pair, but found this")
+     in
+     let lam= ScmPair(ScmSymbol "lambda", ScmPair(args, expr)) in
+    ScmVarDef (Var first, tag_parse lam)
+     (* add support for lambda *)
      | ScmPair (ScmSymbol "lambda", rest)
           when scm_improper_list rest ->
         raise (X_syntax "Malformed lambda-expression!")
@@ -841,8 +860,7 @@
         let arg = tag_parse value in
         ScmApplic (expr_body, [arg])
        
-
-
+      
      (* add support for letrec *)
      | ScmPair (ScmSymbol "letrec", ScmPair (bindings, body)) ->
       let bindings = fst (scheme_list_to_ocaml bindings) in (*get the first element of list in a list ((a 2) (b 3))*)
@@ -852,12 +870,8 @@
           ScmPair(ScmSymbol "set!", ScmPair(ScmSymbol var, value))) 
          | _ -> raise (X_syntax "Expecting a symbol, but found this")) (*The split is to separte pair in pair into 2 lists*)
           bindings) in (*vars = f1...fn, values = (set! f1 Expr1) (set! f2 Expr2)... (set! fn Exprn)*)
-          let values = List.fold_right (fun valu acc -> ScmPair (valu, acc)) values ScmNil in
-          let values = match values with
-          | ScmPair (value, ScmNil) -> value
-          | _ -> raise (X_syntax "Expecting a symbol, but found this") in
-          let values= ScmPair(values,body) in
-          let vars = List.fold_right (fun var acc -> ScmPair (var, acc)) vars ScmNil in
+          let values = list_no_nil (values@[body]) in
+          let vars = scheme_sexpr_list_of_sexpr_list vars in
           let l= ScmPair(ScmSymbol "let", ScmPair(vars, values)) in
           tag_parse l
       
@@ -890,6 +904,7 @@
                            sprint_sexpr sexpr));;
  end;; (* end of struct Tag_Parser *)
  
+
  let parse str = Tag_Parser.tag_parse (read str);;
  
  let rec sexpr_of_expr = function
@@ -1074,6 +1089,9 @@
          ScmIf'(test', dit', dif')
 
        (* add support for sequence *)
+        | ScmSeq(exprs) ->
+          let exprs' = List.map (fun expr -> run expr params env) exprs in
+          ScmSeq' (exprs')
        (* add support for or *)
        | ScmOr(exprs) ->
         let exprs' = List.map (fun expr -> run expr params env) exprs in  
@@ -1086,7 +1104,9 @@
           ScmVarDef' (Var' (v, Free), run expr params env)
        | ScmLambda (params', Simple, expr) ->
           ScmLambda' (params', Simple, run expr params' (params :: env))
-       (* add support for lambda-opt *)
+       | ScmLambda (params' , Opt opt, expr) ->
+          ScmLambda' (params', Opt opt , run expr (params' @ [opt]) (params :: env))
+        (* add support for lambda-opt *)
        | ScmApplic (proc, args) ->
           ScmApplic' (run proc params env,
                       List.map (fun arg -> run arg params env) args,
@@ -1106,7 +1126,15 @@
           let dif' = run in_tail dif in
           ScmIf' (test', dit', dif')
        (* add support for sequences *)
-       (* add support for or *)
+       | ScmSeq'(exprs) ->
+          let exprsf, exprsl = match list_and_last exprs with
+            | Some (init, last) -> (init, last)
+            | None -> failwith "ScmSeq' must have at least one expression"
+          in
+          let experl'= run in_tail exprsl in (*if the or is in_tail position than the last one is too. We get it in recursuion*)
+          let expsf' = List.map (run false) exprsf in   
+          ScmSeq' (expsf' @ [experl'])
+        (* add support for or *)
        | ScmOr'(exprs)-> 
           let exprsf, exprsl = match list_and_last exprs with
             | Some (init, last) -> (init, last)
@@ -1114,7 +1142,7 @@
           in
           let experl'= run in_tail exprsl in (*if the or is in_tail position than the last one is too. We get it in recursuion*)
           let expsf' = List.map (run false) exprsf in   
-          ScmOr' (exprsf @ [experl'])
+          ScmOr' (expsf' @ [experl'])
        | ScmVarSet' (var', expr') -> ScmVarSet' (var', run false expr') (*true/false should we even right in tail call?*)
        | ScmVarDef' (var', expr') -> ScmVarDef' (var', run false expr')
        | (ScmBox' _) as expr' -> expr'
@@ -1130,7 +1158,8 @@
        | ScmApplic' (procs, args, app_kind) ->
         let proc' = run true procs in
         let args' =  List.map (run false) args in (*args are never in tail position regarding application (f x)*)
-        ScmApplic'(proc', args', app_kind)
+        let app_kind' = if in_tail then Tail_Call else Non_Tail_Call in
+        ScmApplic'(proc', args', app_kind')
        
      and runl in_tail expr = function
        | [] -> [run in_tail expr]
@@ -1311,6 +1340,26 @@
           | _, _ -> ScmSeq'(new_sets @ [new_body]) in
         ScmLambda' (params, Simple, new_body)
      (* add support for lambda-opt *)
+
+     | ScmLambda' (params, Opt opt, expr') ->
+      let params' = params @ [opt] in
+      let box_these =
+        List.filter
+          (fun param -> should_box_var param expr' params)
+          params' in
+      let new_body = 
+        List.fold_left
+          (fun body name -> box_sets_and_gets name body)
+          (auto_box expr')
+          box_these in
+      let new_sets = make_sets box_these params' in
+      let new_body = 
+        match box_these, new_body with
+        | [], _ -> new_body
+        | _, ScmSeq' exprs -> ScmSeq' (new_sets @ exprs)
+        | _, _ -> ScmSeq'(new_sets @ [new_body]) in
+      ScmLambda' (params, Opt opt , new_body)
+
      | ScmApplic' (proc, args, app_kind) ->
         ScmApplic' (auto_box proc, List.map auto_box args, app_kind);;
  
