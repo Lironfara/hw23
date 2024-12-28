@@ -861,19 +861,6 @@
           let l= ScmPair(ScmSymbol "let", ScmPair(vars, values)) in
           tag_parse l
       
-      (*Step 1 : extract f1 ... fn*)
-      (*Step 2 : set binding to pairs of (fi 'wh)*)
-      (*Step 3 : body of let is list of n (set! fi (expri)) + body*)
-
-      (*let ((f1 'wh) (f2 'wh) ..... (fn 'wh)) 
-      (set! f1 (expr1) 
-      (set! f2 (expr2)
-      ....
-      (set! fn (exprn))
-      body )*)
-
-
-
      | ScmPair (ScmSymbol "and", ScmNil) -> tag_parse (ScmBoolean true)
      | ScmPair (ScmSymbol "and", exprs) ->
         (match (scheme_list_to_ocaml exprs) with
@@ -1077,9 +1064,20 @@
        match expr with
        | ScmConst sexpr -> ScmConst' sexpr
        (* add support for ScmVarGet *)
+       | ScmVarGet (Var v) -> 
+        ScmVarGet' (tag_lexical_address_for_var v params env)
        (* add support for if *)
+       | ScmIf (test, dit, dif) ->
+         let test' = run test params env in
+         let dit' = run dit params env in
+         let dif' = run dif params env in
+         ScmIf'(test', dit', dif')
+
        (* add support for sequence *)
        (* add support for or *)
+       | ScmOr(exprs) ->
+        let exprs' = List.map (fun expr -> run expr params env) exprs in  
+        ScmOr'(exprs')
        | ScmVarSet(Var v, expr) ->
           ScmVarSet' ((tag_lexical_address_for_var v params env),
                       run expr params env)
@@ -1097,25 +1095,49 @@
      fun expr -> run expr [] [];;
  
    (* run this second *)
-   let annotate_tail_calls = 
+   let annotate_tail_calls = (*if - in tail posiiotn dit + dif tail position*)
      let rec run in_tail = function
        | (ScmConst' _) as orig -> orig
        | (ScmVarGet' _) as orig -> orig
        (* add support for if *)
+       | ScmIf' (test, dit, dif) ->
+          let test' = run false test in (*getting the in_tail in recursion*)
+          let dit' = run in_tail dit in
+          let dif' = run in_tail dif in
+          ScmIf' (test', dit', dif')
        (* add support for sequences *)
        (* add support for or *)
-       | ScmVarSet' (var', expr') -> ScmVarSet' (var', run false expr')
+       | ScmOr'(exprs)-> 
+          let exprsf, exprsl = match list_and_last exprs with
+            | Some (init, last) -> (init, last)
+            | None -> failwith "ScmOr' must have at least one expression"
+          in
+          let experl'= run in_tail exprsl in (*if the or is in_tail position than the last one is too. We get it in recursuion*)
+          let expsf' = List.map (run false) exprsf in   
+          ScmOr' (exprsf @ [experl'])
+       | ScmVarSet' (var', expr') -> ScmVarSet' (var', run false expr') (*true/false should we even right in tail call?*)
        | ScmVarDef' (var', expr') -> ScmVarDef' (var', run false expr')
        | (ScmBox' _) as expr' -> expr'
        | (ScmBoxGet' _) as expr' -> expr'
        | ScmBoxSet' (var', expr') -> ScmBoxSet' (var', run false expr')
        (* add support for lambda *)
+       | ScmLambda' (params, lambda_kind, exp) -> (*params are just string, not exp*)
+       (*(lambda() (if(a)(a b)(or x y)))*)
+        let exp' = run true exp (*the exp is in tail position - if it's not application the function will fix it*)
+        in
+        ScmLambda' (params, lambda_kind, exp')
        (* add support for applic *)
+       | ScmApplic' (procs, args, app_kind) ->
+        let proc' = run true procs in
+        let args' =  List.map (run false) args in (*args are never in tail position regarding application (f x)*)
+        ScmApplic'(proc', args', app_kind)
+       
      and runl in_tail expr = function
        | [] -> [run in_tail expr]
        | expr' :: exprs -> (run false expr) :: (runl in_tail expr' exprs)
      in fun expr' -> run false expr';;
  
+
    (* auto_box *)
  
    let copy_list = List.map (fun si -> si);;
